@@ -1,0 +1,373 @@
+#! /bin/bash 
+
+# 2020/2021 IOS project №1
+# Author and The Most Beautiful out of all of Programmers: 
+# Ekaterina Krupenko, xkrupe00
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+ 
+print_help()
+{
+    echo "Script name:"
+    echo "              tradelog - stock market log analyzer"
+    echo
+    echo "Usage:"
+    echo "              tradelog [-h|--help] [FILTER] [COMMAND] [LOG [LOG2 [...]]]"
+    echo
+    echo "Call:"
+    echo
+    echo "      COMMAND can be one of:"
+    echo
+    echo "              list-tick       statement of occurring stock exchange symbols \"ticks\""
+    echo "              profit          statement of total profit from closed position"
+    echo "              pos             statement of values of currently help positions, descending by value"
+    echo "              last-price      statement of the last known price for each ticker"
+    echo "              hist-ord        statement of histogram of the number of transactions according to the ticker"
+    echo "              graph-pos       statement of graph of values of help positions according to the ticker"
+    echo
+    echo "      FILTER can be a combination of the following:"
+    echo
+    echo "              -a      DATETIME  -  after:      filter only logs AFTER this date and time (without this date). DATETIME format is YYYY-MM-DD HH:MM:SS"
+    echo "              -b      DATETIME  - before:      filter only logs BEFORE this date and time (without this date)"
+    echo "              -t      TICKER                   filter only log with this ticker"
+    echo "              -w      WIDTH                    filter how long line of graphs, can't be use more then once"
+    echo
+}
+
+# open files for use in functions
+unzip_file()  
+{
+    if [ ${#logs[*]} = 0 ]
+    then
+        # in case there are no files 
+        # but there are commands
+        while read -r read_input
+        do
+        if [[ $read_input  =~ \.log$ ]]
+        then
+            cat "$read_input" 
+            return 1
+        elif [[ $read_input  =~ \.log.gz$ ]]
+        then
+            zcat "$read_input"
+            return 1
+        else
+            echo "$read_input"
+        fi 
+        done
+    else
+        for (( x=0; x<${#logs[*]}; x++ ))
+        do
+            if [[ ${logs[x]} =~ \.log$ ]]
+            then
+                cat "${logs[x]}"
+            else   
+                zcat "${logs[x]}"
+            fi
+        done 
+    fi
+}
+
+# in awk, create a variable with all the tickers 
+# and in the loop search tickers, output a filtered result
+filter_ticker() 
+{
+    awk -F';' -v gor="${ticker[*]}" '{split(gor, her, " ");
+    count=split(gor, her, " ");
+    for( i=0; i<=count; i++ )
+    {
+        if( $2 == her[i] ) print $0;
+    }
+    }'
+}
+
+filter_after() 
+{ 
+    awk -F';' -v x="$after" '{ if($1 > x) print $0 }'  
+}
+
+filter_before()
+{
+    awk -F';' -v y="$before" '{ if($1 < y) print $0 }'  
+}
+
+# consider all filter combinations
+filters() 
+{
+    if [ ${#ticker[*]} != 0 ] && [ ${#after[*]} != 0 ] && [ ${#before[*]} != 0 ]
+    then
+        unzip_file | filter_ticker | filter_after | filter_before
+    elif [ ${#ticker[*]} != 0 ] && [ ${#after[*]} != 0 ] && [ ${#before[*]} = 0 ]
+    then 
+        unzip_file | filter_ticker | filter_after
+    elif [ ${#ticker[*]} != 0 ] && [ ${#before[*]} != 0 ] && [ ${#after[*]} = 0 ]
+    then 
+        unzip_file | filter_ticker | filter_before
+    elif [ ${#ticker[*]} = 0 ] && [ ${#before[*]} != 0 ] && [ ${#after[*]} != 0 ] 
+    then 
+        unzip_file | filter_before | filter_after
+    elif [ ${#ticker[*]} = 0 ] && [ ${#before[*]} != 0 ] && [ ${#after[*]} = 0 ]
+    then 
+        unzip_file | filter_before
+    elif [ ${#ticker[*]} = 0 ] && [ ${#before[*]} = 0 ] && [ ${#after[*]} != 0 ] 
+    then 
+        unzip_file | filter_after
+    elif [ ${#ticker[*]} != 0 ] && [ ${#before[*]} = 0 ] && [ ${#after[*]} = 0 ]
+    then 
+        unzip_file | filter_ticker
+    elif [ ${#ticker[*]} = 0 ] && [ ${#before[*]} = 0 ] && [ ${#after[*]} = 0 ]
+    then 
+        unzip_file
+    fi
+}
+
+# if width is not specified set to default value of 1000
+filter_width() 
+{
+    if [ "$width" -eq 0 ]
+    then 
+        echo "Error! Division by zero!" 
+        echo "Please, use -h or --help."
+        exit 0
+    fi
+    if [ ${#width[*]} -eq 0 ]
+    then
+        width=1000
+        def=1
+    elif [ "$width" -lt 0 ]
+    then
+        echo "Error! -w can be onli a positive number!" 
+        echo "Please, use -h or --help."
+        exit 0
+    fi
+}
+
+list_tick()
+{
+    filters | cut -d';' -f2  | sort -u
+    p=$((p+1))
+}
+
+# go through the file
+# multiply all prices and shares without forgetting to withdraw buy from sell
+profit_() 
+{
+    filters | awk -F';' '{ ($3=="sell")? a+=$4*$6 : a-=$4*$6} END{printf "%1.2f\n", a}' 
+    p=$((p+1))
+}
+
+# find the number of ticker repetitions 
+# and output as a column in front of the tickers
+# run through a column with repetitions and instead of numbers output '#'
+# not forgetting to ignite 'width'
+hist_ord() 
+{
+    if [ ${#width[*]} -gt 1 ]
+    then 
+        echo "Error! You can't use -w more than once!" 
+        echo "Please, use -h or --help."
+        exit 0
+    fi
+
+    filters | cut -d';' -f2| sort | uniq -c | cut -f1 | awk -v v="$width" -v g="$def" '{if(g==1)v=1;}{$1=$1/v}{$3=$1}{printf "%-10s%-6.0f%6.2f\n", $2, $1, $3}' | awk '{
+        if($2 > 0 && $2 > $3) $2-=1;}{$2=sprintf("%-*s", $2, ""); gsub(" ", "#", $2);} {printf("%-10s: %s\n", $1, $2)}'
+    p=$((p+1))
+    
+} 
+
+# write the price to the array at the name of the tickers
+# write the six column to another array
+# not forgetting the sign before the number, multiply two arrays
+pos_() 
+{
+    filters | awk -F';' '{mel[$2]=$4}
+    {
+        if($3 == "buy") kom[$2]+=$6; 
+        if($3 == "sell") kom[$2]-=$6;
+        }
+        END{
+        for(a in kom)
+        {
+            for(b in mel)
+            {
+                if(a==b) pos[a]=mel[b]*kom[a]
+            }
+        }
+        for(a in pos)
+        {
+            printf("%-9s : %11.2f\n", a, pos[a]) 
+        }
+    }' | sort -t':' -k2nr
+    p=$((p+1))
+}
+
+# var - the most largest number(without "-") devided by width
+graph_pos() 
+{
+    if [ ${#width[*]} -gt 1 ]
+    then 
+        echo "Error! You can't use -w more than once!" 
+        echo "Please, use -h or --help."
+        exit 0
+    fi
+    
+    var=$( pos_ | awk -v t="$width" '{if($3 < 0) $3=$3*(-1)}{if(a < $3)a=$3}END{ printf "%6.2f\n", a/t}')
+
+    # v = var, numbers from pos devided "var"
+    # new column $4 = $3, round numbers from $3
+    # if the number from $3 is positive
+    # output number by "#"
+    # if the number is negateve "!", if 0 is ""
+
+    pos_ | awk -v v="$var" '{$3=$3/v}{$4=$3}{printf "%-10s%-6.0f%6.2f\n", $1, $3, $4}' | awk '{
+        if($2 > 0 && $2 > $3) $2-=1;
+        if($2 < 0 && $2 < $3) $2+=1;}
+        {
+            if($2 > 0) 
+            {
+                $2=sprintf("%-*s", $2, ""); gsub(" ", "#", $2); printf("%-10s: %s\n", $1, $2)
+            }
+            if($2 < 0) 
+            {
+                $2=$2*(-1)
+                $2=sprintf("%-*s", $2, ""); gsub(" ", "!", $2); printf("%-10s: %s\n", $1, $2)
+            }
+            if($2 == 0)
+            {
+                $2=""; printf("%-10s:%s\n", $1, $2)
+            }
+        }' | sort -u -k 1,1
+        p=$((p+1))
+}
+
+last_price()
+{
+	filters | sort -r | awk -F';' '{ printf("%-10s: %7.2f\n", $2, $4 )}' | sort -u -k 1,1  
+    p=$((p+1))
+}
+
+# check the value of files and other args
+# according to the assignment, give way for the order
+
+if [ $# -eq 0 ]
+then
+    #in case there are no commands and no files
+    while read -r read_input
+    do
+        if [[ $read_input  =~ \.log$ ]]
+        then
+            cat "$read_input" 
+            break
+        elif [[ $read_input  =~ \.log.gz$ ]]
+        then
+            zcat "$read_input"
+            break
+        else
+            echo "$read_input"
+        fi 
+    done
+else
+    args=("$@")
+    for (( i=0; i<=$#-1; i++ ))
+    do
+          
+        if [[ ${args[i]}  =~ \.log$ ]] || [[ ${args[i]}  =~ \.log.gz$ ]]
+        then
+            logs+=("${args[${i}]}")
+        else
+            commands+=("${args[${i}]}")
+        fi 
+    done
+
+    # in case when from arguments onli file
+    #output file
+    if [ ${#logs[*]} != 0 ] && [ ${#commands[*]} == 0 ]
+    then
+        unzip_file
+    fi
+
+    for (( i=0; i<${#commands[*]}; i++ ))
+    do
+    p=0
+        case ${commands[${i}]} in
+            -h)
+                print_help
+                exit 0
+                ;;
+            --help)
+                print_help
+                exit 0
+                ;;
+            -a)
+		        if [[ ${commands[i+1]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$  ]]
+		        then
+			        after=${commands[i+1]}
+			        after+=" ${commands[i+2]}"
+		        else 
+               	    after=${commands[i+1]}
+		        fi 		
+                i=$((i+1))
+                ;;  
+            -b)
+		        if [[ ${commands[i+1]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+		        then
+                	before=${commands[i+1]}
+			        before+=" ${commands[i+2]}"
+		        else
+			        before=${commands[i+1]}
+	            fi	
+                i=$((i+1))
+                ;;
+            -t)
+                ticker+=("${commands[i+1]}")
+                i=$((i+1)) 
+                ;; 
+            -w)
+                width+=("${commands[i+1]}")
+                i=$((i+1))
+                ;;
+            pos)
+                pos_ 
+                p=$((p+1))
+                i=$((i+1))
+                ;;
+            last-price)
+                last_price
+                p=$((p+1))
+                i=$((i+1))
+                ;;
+            profit)
+                profit_
+                p=$((p+1))
+                i=$((i+1))
+                ;;
+            hist-ord)
+                filter_width
+                hist_ord
+                p=$((p+1))
+                i=$((i+1))
+                ;;
+            graph-pos)
+                filter_width
+                graph_pos
+                p=$((p+1))
+                i=$((i+1))
+                ;;
+            list-tick)
+                list_tick
+                p=$((p+1))
+                i=$((i+1))
+        esac
+    done
+
+    # in case there are no commands
+    # but there are filters
+    if [ "$p" == 0 ]
+    then 
+        filters
+    fi
+fi 
+  
+
+
